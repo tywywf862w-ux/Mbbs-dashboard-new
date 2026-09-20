@@ -2174,6 +2174,18 @@
       0 4px 12px var(--tile-shadow);
   }
 
+  /* Subject tiles were sizing purely to their own content, so a
+     two-line subject name (e.g. "Obstetrics & Gynaecology", "PSM /
+     Community Medicine") made that one tile taller than every
+     single-line neighbor around it (89px vs 80px) — visible as
+     mismatched card sizes in the grid. Scoped to the subject grid only
+     (not the Revision Overview cards, which have their own distinct
+     layout) so every subject tile, including the "+" add-subject tile,
+     shares one consistent height regardless of name length. */
+  #subject-grid-container .tile {
+    min-height: 92px;
+  }
+
   /* Once a tile name is being edited, its text needs to be selectable
      again so document.execCommand("selectAll") and normal typing work. */
   .tile-name[contenteditable="true"] {
@@ -2182,7 +2194,16 @@
   }
 
   .tile.menu-open {
-    z-index: 40;
+    /* Was z-index: 40 — higher than the sticky header's z-index: 20,
+       which let an open tile menu/remove-confirm panel visually climb
+       above the header once the page was scrolled (the tile, and
+       everything absolutely-positioned inside it, stack together as
+       one unit at whatever z-index this rule sets). 15 keeps it safely
+       above ordinary tiles (z-index: 1) — enough for its popup to
+       cover sibling tiles below it — while staying under the header
+       (20) so it correctly disappears behind it on scroll instead of
+       floating on top. */
+    z-index: 15;
   }
 
   .tile::before {
@@ -4046,6 +4067,15 @@
       gap: 4px;
       flex-direction: column;
       align-items: stretch;
+    }
+    /* Overrides the 92px base min-height set for the phone/default
+       grid — at these smaller iPad font sizes a two-line subject name
+       needs more like 114px to fit without the rows still ending up
+       mismatched (grid only stretches tiles to match within their own
+       row, not across the whole grid, so this has to be set high
+       enough to cover the tallest possible tile everywhere). */
+    #subject-grid-container .tile {
+      min-height: 114px;
     }
     .ring-wrap { width: 26px; height: 26px; min-width: 26px; }
     .ring-label { font-size: 8px; }
