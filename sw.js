@@ -2,7 +2,7 @@
 // Caches the app shell so the dashboard loads and works fully offline.
 // Bump CACHE_VERSION whenever index.html (or any cached asset) changes,
 // so returning users get the update instead of a stale cached copy.
-const CACHE_VERSION = "mbbs-dashboard-v139";
+const CACHE_VERSION = "mbbs-dashboard-v140";
 const APP_SHELL = [
   "./",
   "./index.html",

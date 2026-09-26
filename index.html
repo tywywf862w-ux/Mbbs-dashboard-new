@@ -1642,6 +1642,41 @@
     margin: 4px 0 6px;
   }
 
+  .applock-timeout-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 0 8px;
+    margin: 2px 0 6px;
+  }
+
+  .applock-timeout-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    opacity: 0.65;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .applock-timeout-select {
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--tile-text, #1a2229);
+    background: linear-gradient(155deg, rgba(20,30,35,0.06) 0%, rgba(20,30,35,0.02) 100%), #ffffff;
+    border: 1px solid rgba(20,30,35,0.18);
+    border-radius: 6px;
+    padding: 7px 8px;
+    box-shadow: 0 1px 3px rgba(20,30,35,0.08) inset;
+    cursor: pointer;
+  }
+
+  .applock-timeout-select:focus {
+    outline: none;
+    border-color: var(--accent-green, #1f7a4d);
+    box-shadow: 0 0 0 2px rgba(31,122,77,0.25);
+  }
+
   .color-menu-popover {
     width: 200px;
     padding: 8px;
@@ -4394,6 +4429,27 @@
 
               <div class="backup-divider"></div>
 
+              <div class="applock-timeout-row">
+                <label class="applock-timeout-label" for="auto-backup-select">Automatic backup</label>
+                <select id="auto-backup-select" class="applock-timeout-select">
+                  <option value="0">Off</option>
+                  <option value="1">Daily</option>
+                  <option value="7">Weekly</option>
+                </select>
+              </div>
+              <p class="backup-sync-status" id="auto-backup-status">Automatic backup is off</p>
+              <button class="color-menu-item" id="restore-auto-backup-btn" style="display:none">
+                <span class="settings-menu-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 12a9 9 0 1 0 3-6.7"></path>
+                    <path d="M3 4v5h5"></path>
+                  </svg>
+                </span>
+                <span>Restore last automatic backup</span>
+              </button>
+
+              <div class="backup-divider"></div>
+
               <button class="color-menu-item" id="export-backup-btn">
                 <span class="settings-menu-icon">
                   <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -4424,6 +4480,19 @@
               <p class="applock-note">A PIN only stops someone from casually opening this app on your unlocked phone. It's stored on this device only and isn't real encryption — your iPhone's own passcode/Face ID is still your strongest protection.</p>
               <button class="applock-action-btn" id="applock-set-btn">Set a PIN</button>
               <button class="applock-action-btn applock-remove-btn" id="applock-remove-btn" style="display:none">Remove PIN</button>
+
+              <div class="backup-divider" id="applock-timeout-divider" style="display:none"></div>
+              <div class="applock-timeout-row" id="applock-timeout-row" style="display:none">
+                <label class="applock-timeout-label" for="applock-timeout-select">Auto-lock after</label>
+                <select id="applock-timeout-select" class="applock-timeout-select">
+                  <option value="0">Never</option>
+                  <option value="1">1 minute</option>
+                  <option value="5">5 minutes</option>
+                  <option value="15">15 minutes</option>
+                  <option value="30">30 minutes</option>
+                </select>
+              </div>
+              <p class="device-name-note" id="applock-timeout-note" style="display:none">Also locks if you switch away and come back after this long.</p>
             </div>
           </div>
         </div>
@@ -7286,6 +7355,144 @@
     btn.title = `Export backup (download JSON) — last backup: ${dow}, ${month} ${d.getDate()}`;
   }
 
+  // ---------- Automatic local backup: a rolling snapshot saved into
+  // this browser's own storage, separate from the manual "Export
+  // backup" file download — a safety net against accidentally deleting
+  // or overwriting your own data in-app. This can only run while the
+  // app is actually open (there's no reliable way for a web app to
+  // wake up and back itself up while fully closed), so "Daily"/"Weekly"
+  // means "the first time you open the app after that much time has
+  // passed" rather than a true background schedule. It intentionally
+  // is NOT included in the exported/imported backup file itself, since
+  // a backup-of-a-backup nested inside every export would be confusing
+  // and would balloon the file size for no benefit. ----------
+  const AUTO_BACKUP_FREQ_KEY = "rounds_auto_backup_freq_v1";
+  const AUTO_BACKUP_SNAPSHOT_KEY = "rounds_auto_backup_snapshot_v1";
+  const AUTO_BACKUP_LAST_KEY = "rounds_auto_backup_last_v1";
+
+  function loadAutoBackupFreqDays() {
+    try {
+      const raw = localStorage.getItem(AUTO_BACKUP_FREQ_KEY);
+      const days = parseInt(raw, 10);
+      return Number.isFinite(days) && days >= 0 ? days : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function saveAutoBackupFreqDays(days) {
+    try {
+      localStorage.setItem(AUTO_BACKUP_FREQ_KEY, String(parseInt(days, 10) || 0));
+    } catch (e) {
+      console.error("Failed to save auto-backup frequency", e);
+    }
+  }
+
+  function maybeRunAutoBackup() {
+    const freqDays = loadAutoBackupFreqDays();
+    if (!freqDays) return false; // "Off"
+    let last;
+    try {
+      last = localStorage.getItem(AUTO_BACKUP_LAST_KEY);
+    } catch (e) {
+      last = null;
+    }
+    if (last) {
+      const elapsedDays = (Date.now() - new Date(last).getTime()) / (1000 * 60 * 60 * 24);
+      if (elapsedDays < freqDays) return false; // not due yet
+    }
+    try {
+      const payload = buildBackupPayload();
+      localStorage.setItem(AUTO_BACKUP_SNAPSHOT_KEY, JSON.stringify(payload));
+      localStorage.setItem(AUTO_BACKUP_LAST_KEY, new Date().toISOString());
+      return true;
+    } catch (e) {
+      // Most likely localStorage ran out of space — the manual export
+      // flow still works fine even if this silently fails.
+      console.error("Automatic backup failed", e);
+      return false;
+    }
+  }
+
+  function renderAutoBackupStatus() {
+    const select = document.getElementById("auto-backup-select");
+    const statusEl = document.getElementById("auto-backup-status");
+    const restoreBtn = document.getElementById("restore-auto-backup-btn");
+    if (!select || !statusEl || !restoreBtn) return;
+
+    select.value = String(loadAutoBackupFreqDays());
+
+    let last;
+    try {
+      last = localStorage.getItem(AUTO_BACKUP_LAST_KEY);
+    } catch (e) {
+      last = null;
+    }
+
+    if (!loadAutoBackupFreqDays()) {
+      statusEl.textContent = last
+        ? "Automatic backup is off"
+        : "Automatic backup is off";
+    } else if (last) {
+      const d = new Date(last);
+      const dow = DOW_NAMES[d.getDay()];
+      const month = MONTH_NAMES[d.getMonth()];
+      statusEl.textContent = `Last automatic backup: ${dow}, ${month} ${d.getDate()}`;
+    } else {
+      statusEl.textContent = "Automatic backup is on — will run next time you open the app";
+    }
+
+    restoreBtn.style.display = last ? "flex" : "none";
+  }
+
+  function restoreAutoBackup() {
+    let raw;
+    try {
+      raw = localStorage.getItem(AUTO_BACKUP_SNAPSHOT_KEY);
+    } catch (e) {
+      raw = null;
+    }
+    if (!raw) {
+      showToast("No automatic backup found yet");
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      showToast("Automatic backup is corrupted");
+      return;
+    }
+    const err = validateBackupPayload(parsed);
+    if (err) {
+      showToast("Automatic backup looks invalid");
+      return;
+    }
+    const confirmed = window.confirm(
+      "Restore from your last automatic backup? This replaces every subject, chapter, and setting currently in the app with what was saved at that time."
+    );
+    if (!confirmed) return;
+    restoreBackupPayload(parsed);
+    reloadAllStateFromStorage();
+    showToast("Restored from automatic backup");
+  }
+
+  function initAutoBackupSettings() {
+    document.getElementById("auto-backup-select").addEventListener("change", (e) => {
+      const wasOff = loadAutoBackupFreqDays() === 0;
+      saveAutoBackupFreqDays(e.target.value);
+      if (wasOff && e.target.value !== "0") {
+        // Turning it on for the first time — take a backup right away
+        // rather than waiting for the next full interval to pass.
+        maybeRunAutoBackup();
+      }
+      renderAutoBackupStatus();
+      showToast("Automatic backup setting saved");
+    });
+
+    document.getElementById("restore-auto-backup-btn").addEventListener("click", restoreAutoBackup);
+  }
+
   function initBackupStrip() {
     renderBackupLastDisplay();
 
@@ -8108,6 +8315,7 @@
       openOnly(backupPopover);
       renderSyncProvenanceDisplay();
       renderDeviceNameNote();
+      renderAutoBackupStatus();
     });
 
     document.getElementById("open-app-lock-panel-btn").addEventListener("click", (e) => {
@@ -8283,6 +8491,7 @@
     document.getElementById("lock-overlay").classList.remove("visible");
     document.getElementById("lock-overlay").setAttribute("aria-hidden", "true");
     document.documentElement.removeAttribute("data-locked");
+    resetIdleTimer();
   }
 
   function initLockScreen() {
@@ -8334,15 +8543,28 @@
     const descEl = document.getElementById("applock-status-desc");
     const setBtn = document.getElementById("applock-set-btn");
     const removeBtn = document.getElementById("applock-remove-btn");
+    const timeoutRow = document.getElementById("applock-timeout-row");
+    const timeoutDivider = document.getElementById("applock-timeout-divider");
+    const timeoutNote = document.getElementById("applock-timeout-note");
+    const timeoutSelect = document.getElementById("applock-timeout-select");
 
     if (hash) {
       descEl.textContent = "PIN is set — this app is locked when opened.";
       setBtn.textContent = "Change PIN";
       removeBtn.style.display = "block";
+      // Auto-lock only makes sense once a PIN actually exists — no
+      // point offering an idle timeout for a lock that isn't set.
+      timeoutRow.style.display = "flex";
+      timeoutDivider.style.display = "block";
+      timeoutNote.style.display = "block";
+      timeoutSelect.value = String(loadAutoLockTimeoutMinutes());
     } else {
       descEl.textContent = "No PIN set — anyone who opens this app can see everything.";
       setBtn.textContent = "Set a PIN";
       removeBtn.style.display = "none";
+      timeoutRow.style.display = "none";
+      timeoutDivider.style.display = "none";
+      timeoutNote.style.display = "none";
     }
   }
 
@@ -8358,6 +8580,80 @@
       renderAppLockSettingsPanel();
       showToast("PIN removed");
     });
+
+    document.getElementById("applock-timeout-select").addEventListener("change", (e) => {
+      saveAutoLockTimeoutMinutes(e.target.value);
+      resetIdleTimer();
+      showToast("Auto-lock timing saved");
+    });
+  }
+
+  // ---------- Auto-lock on idle: locks the app after N minutes of no
+  // activity, and separately if the app was backgrounded (tab/app
+  // switched away) for longer than that same duration — covers both
+  // "left it sitting open" and the more common "switched apps and came
+  // back later" cases. Only ever active while a PIN is actually set. ----------
+  const APPLOCK_TIMEOUT_KEY = "rounds_applock_timeout_v1";
+  let idleLockTimer = null;
+  let appHiddenAt = null;
+
+  function loadAutoLockTimeoutMinutes() {
+    try {
+      const raw = localStorage.getItem(APPLOCK_TIMEOUT_KEY);
+      const mins = parseInt(raw, 10);
+      return Number.isFinite(mins) && mins >= 0 ? mins : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function saveAutoLockTimeoutMinutes(minutes) {
+    try {
+      localStorage.setItem(APPLOCK_TIMEOUT_KEY, String(parseInt(minutes, 10) || 0));
+    } catch (e) {
+      console.error("Failed to save auto-lock timeout", e);
+    }
+  }
+
+  function triggerIdleLock() {
+    if (!loadPinHash()) return; // no PIN set — nothing to lock
+    if (document.documentElement.getAttribute("data-locked") === "true") return; // already locked
+    document.documentElement.setAttribute("data-locked", "true");
+    showLockOverlay("unlock");
+  }
+
+  function resetIdleTimer() {
+    clearTimeout(idleLockTimer);
+    const minutes = loadAutoLockTimeoutMinutes();
+    if (!minutes) return; // "Never" selected
+    if (!loadPinHash()) return;
+    if (document.documentElement.getAttribute("data-locked") === "true") return;
+    idleLockTimer = setTimeout(triggerIdleLock, minutes * 60 * 1000);
+  }
+
+  function initIdleAutoLock() {
+    const activityEvents = ["mousemove", "keydown", "touchstart", "click", "scroll", "wheel"];
+    activityEvents.forEach((evt) => {
+      document.addEventListener(evt, resetIdleTimer, { passive: true });
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        appHiddenAt = Date.now();
+        clearTimeout(idleLockTimer);
+      } else {
+        const minutes = loadAutoLockTimeoutMinutes();
+        const elapsedMs = appHiddenAt ? Date.now() - appHiddenAt : 0;
+        appHiddenAt = null;
+        if (minutes && elapsedMs >= minutes * 60 * 1000) {
+          triggerIdleLock();
+        } else {
+          resetIdleTimer();
+        }
+      }
+    });
+
+    resetIdleTimer();
   }
 
   // ---------- Personal information ----------
@@ -8583,6 +8879,9 @@
   initLockScreen();
   initAppLockSettings();
   checkLockOnStartup();
+  initIdleAutoLock();
+  initAutoBackupSettings();
+  maybeRunAutoBackup();
 
   initCalendarState();
   initBgColorPicker();
