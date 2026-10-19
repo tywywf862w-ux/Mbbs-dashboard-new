@@ -1750,6 +1750,71 @@
     cursor: not-allowed;
   }
 
+  .revision-filter-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .revision-filter-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .revision-filter-field label {
+    font-size: 10px;
+    font-weight: 700;
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .revision-filter-field select {
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--tile-text, #1a2229);
+    background: linear-gradient(155deg, rgba(20,30,35,0.06) 0%, rgba(20,30,35,0.02) 100%), #ffffff;
+    border: 1px solid rgba(20,30,35,0.18);
+    border-radius: 7px;
+    padding: 7px 10px;
+    min-width: 150px;
+    box-shadow: 0 1px 3px rgba(20,30,35,0.08) inset;
+    cursor: pointer;
+  }
+
+  .revision-filter-field select:focus {
+    outline: none;
+    border-color: var(--accent-green, #1f7a4d);
+    box-shadow: 0 0 0 2px rgba(31,122,77,0.25);
+  }
+
+  .revision-filter-clear {
+    font: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--accent-green-dark, #14532e);
+    background: var(--accent-green-soft, #e6f4ec);
+    border: 1px solid rgba(31,122,77,0.3);
+    border-radius: 7px;
+    padding: 7px 12px;
+    cursor: pointer;
+    height: 33px;
+  }
+
+  @media (max-width: 480px) {
+    .revision-filter-toolbar {
+      gap: 8px;
+    }
+    .revision-filter-field select {
+      min-width: 0;
+      flex: 1;
+    }
+  }
+
   .color-menu-popover {
     width: 200px;
     padding: 8px;
@@ -6450,6 +6515,62 @@
     });
   }
 
+  // ---------- Shared filter state + UI for the two cross-subject
+  // revision dashboards below (Chapters Due, Revision Backlog). Each
+  // page keeps its own independent stage/subject selection — picking a
+  // filter on one never affects the other — and "All" on both is what
+  // keeps the full combined list exactly like before. ----------
+  const revisionDueFilters = { stage: "all", subject: "all" };
+  const revisionBacklogFilters = { stage: "all", subject: "all" };
+
+  function buildRevisionFilterToolbar(idPrefix, items, filters) {
+    const stageOptions = getRevisionStages()
+      .map(s => `<option value="${s.key}" ${filters.stage === s.key ? "selected" : ""}>${s.label} &middot; Day ${s.offset}</option>`)
+      .join("");
+
+    const subjectsPresent = [];
+    const seenSubjectIds = new Set();
+    items.forEach(item => {
+      if (!seenSubjectIds.has(item.subject.id)) {
+        seenSubjectIds.add(item.subject.id);
+        subjectsPresent.push(item.subject);
+      }
+    });
+    subjectsPresent.sort((a, b) => a.name.localeCompare(b.name));
+    const subjectOptions = subjectsPresent
+      .map(s => `<option value="${s.id}" ${filters.subject === s.id ? "selected" : ""}>${escapeHtml(s.name)}</option>`)
+      .join("");
+
+    return `
+      <div class="revision-filter-toolbar">
+        <div class="revision-filter-field">
+          <label for="${idPrefix}-stage-filter">Stage</label>
+          <select id="${idPrefix}-stage-filter">
+            <option value="all" ${filters.stage === "all" ? "selected" : ""}>All stages</option>
+            ${stageOptions}
+          </select>
+        </div>
+        <div class="revision-filter-field">
+          <label for="${idPrefix}-subject-filter">Subject</label>
+          <select id="${idPrefix}-subject-filter">
+            <option value="all" ${filters.subject === "all" ? "selected" : ""}>All subjects</option>
+            ${subjectOptions}
+          </select>
+        </div>
+        ${(filters.stage !== "all" || filters.subject !== "all")
+          ? `<button class="revision-filter-clear" id="${idPrefix}-filter-clear">Show all</button>`
+          : ""}
+      </div>
+    `;
+  }
+
+  function applyRevisionFilters(items, filters) {
+    return items.filter(item =>
+      (filters.stage === "all" || item.stage.key === filters.stage) &&
+      (filters.subject === "all" || item.subject.id === filters.subject)
+    );
+  }
+
   // ---------- Chapters Due for Revision (own dashboard, cross-subject) ----------
   // Shows every revision stage across every subject that hasn't been marked
   // done yet — regardless of date (today, upcoming, or overdue), all in one
@@ -6492,6 +6613,7 @@
         <div class="subject-title">Chapters Due for Revision</div>
       </div>
       <p class="daily-sub">Pulled automatically from every subject's Spaced Revision Dashboard (R1–R5). Shows only chapters due today, not yet marked done.</p>
+      <div id="revision-due-filter-toolbar"></div>
       </div>
 
       <div class="table-wrap">
@@ -6517,14 +6639,42 @@
 
   function renderRevisionDueDashboard() {
     const tbody = document.getElementById("revision-due-tbody");
-    const items = getAllDueRevisions();
+    const allItems = getAllDueRevisions();
 
     updateRevisionOverviewBadges();
 
     if (!tbody) return;
 
-    if (items.length === 0) {
+    const toolbarEl = document.getElementById("revision-due-filter-toolbar");
+    if (toolbarEl) {
+      toolbarEl.innerHTML = buildRevisionFilterToolbar("revision-due", allItems, revisionDueFilters);
+      const stageSel = document.getElementById("revision-due-stage-filter");
+      const subjectSel = document.getElementById("revision-due-subject-filter");
+      const clearBtn = document.getElementById("revision-due-filter-clear");
+      if (stageSel) stageSel.addEventListener("change", (e) => {
+        revisionDueFilters.stage = e.target.value;
+        renderRevisionDueDashboard();
+      });
+      if (subjectSel) subjectSel.addEventListener("change", (e) => {
+        revisionDueFilters.subject = e.target.value;
+        renderRevisionDueDashboard();
+      });
+      if (clearBtn) clearBtn.addEventListener("click", () => {
+        revisionDueFilters.stage = "all";
+        revisionDueFilters.subject = "all";
+        renderRevisionDueDashboard();
+      });
+    }
+
+    const items = applyRevisionFilters(allItems, revisionDueFilters);
+
+    if (allItems.length === 0) {
       tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state">Nothing due today. Set lecture completion dates in a subject's chapter tracker to generate more revision stages.</div></td></tr>`;
+      return;
+    }
+
+    if (items.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state">Nothing matches this filter right now.</div></td></tr>`;
       return;
     }
 
@@ -6722,6 +6872,7 @@
         <div class="subject-title">Revision Backlog</div>
       </div>
       <p class="daily-sub">Chapters from Chapters Due for Revision that were not marked done on their day. Automatically grows each day something is missed — never shows today's or future work.</p>
+      <div id="revision-backlog-filter-toolbar"></div>
       </div>
 
       <div class="table-wrap">
@@ -6748,15 +6899,43 @@
 
   function renderRevisionBacklogDashboard() {
     const tbody = document.getElementById("revision-backlog-tbody");
-    const items = getAllBacklogRevisions();
+    const allItems = getAllBacklogRevisions();
     const todayStr = todayISO();
 
     updateRevisionOverviewBadges();
 
     if (!tbody) return;
 
-    if (items.length === 0) {
+    const toolbarEl = document.getElementById("revision-backlog-filter-toolbar");
+    if (toolbarEl) {
+      toolbarEl.innerHTML = buildRevisionFilterToolbar("revision-backlog", allItems, revisionBacklogFilters);
+      const stageSel = document.getElementById("revision-backlog-stage-filter");
+      const subjectSel = document.getElementById("revision-backlog-subject-filter");
+      const clearBtn = document.getElementById("revision-backlog-filter-clear");
+      if (stageSel) stageSel.addEventListener("change", (e) => {
+        revisionBacklogFilters.stage = e.target.value;
+        renderRevisionBacklogDashboard();
+      });
+      if (subjectSel) subjectSel.addEventListener("change", (e) => {
+        revisionBacklogFilters.subject = e.target.value;
+        renderRevisionBacklogDashboard();
+      });
+      if (clearBtn) clearBtn.addEventListener("click", () => {
+        revisionBacklogFilters.stage = "all";
+        revisionBacklogFilters.subject = "all";
+        renderRevisionBacklogDashboard();
+      });
+    }
+
+    const items = applyRevisionFilters(allItems, revisionBacklogFilters);
+
+    if (allItems.length === 0) {
       tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">No backlog — nothing missed so far.</div></td></tr>`;
+      return;
+    }
+
+    if (items.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">Nothing matches this filter right now.</div></td></tr>`;
       return;
     }
 
